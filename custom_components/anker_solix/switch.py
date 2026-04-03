@@ -257,51 +257,6 @@ DEVICE_SWITCHES = [
         mqtt=True,
         mqtt_cmd=SolixMqttCommands.port_memory_switch,
     ),
-    AnkerSolixSwitchDescription(
-        key="usbc_1_switch",
-        translation_key="usbc_1_switch",
-        json_key="usbc_1_switch",
-        exclude_fn=lambda s, d: not ({d.get("type")} - s),
-        device_class=SwitchDeviceClass.SWITCH,
-        mqtt=True,
-        mqtt_cmd=SolixMqttCommands.usbc_1_port_switch,
-    ),
-    AnkerSolixSwitchDescription(
-        key="usbc_2_switch",
-        translation_key="usbc_2_switch",
-        json_key="usbc_2_switch",
-        exclude_fn=lambda s, d: not ({d.get("type")} - s),
-        device_class=SwitchDeviceClass.SWITCH,
-        mqtt=True,
-        mqtt_cmd=SolixMqttCommands.usbc_2_port_switch,
-    ),
-    AnkerSolixSwitchDescription(
-        key="usbc_3_switch",
-        translation_key="usbc_3_switch",
-        json_key="usbc_3_switch",
-        exclude_fn=lambda s, d: not ({d.get("type")} - s),
-        device_class=SwitchDeviceClass.SWITCH,
-        mqtt=True,
-        mqtt_cmd=SolixMqttCommands.usbc_3_port_switch,
-    ),
-    AnkerSolixSwitchDescription(
-        key="usbc_4_switch",
-        translation_key="usbc_4_switch",
-        json_key="usbc_4_switch",
-        exclude_fn=lambda s, d: not ({d.get("type")} - s),
-        device_class=SwitchDeviceClass.SWITCH,
-        mqtt=True,
-        mqtt_cmd=SolixMqttCommands.usbc_4_port_switch,
-    ),
-    AnkerSolixSwitchDescription(
-        key="usba_switch",
-        translation_key="usba_switch",
-        json_key="usba_switch",
-        exclude_fn=lambda s, d: not ({d.get("type")} - s),
-        device_class=SwitchDeviceClass.SWITCH,
-        mqtt=True,
-        mqtt_cmd=SolixMqttCommands.usba_port_switch,
-    ),
 ]
 
 
@@ -742,7 +697,17 @@ class AnkerSolixSwitch(CoordinatorEntity, SwitchEntity):
                         toFile=self.coordinator.client.testmode(),
                     )
                 elif self._attribute_name == "allow_grid_export":
-                    # First control all solarbank devices via individual MQTT device setting
+                    if (
+                        data.get("type") == SolixDeviceType.COMBINER_BOX.value
+                        or data.get("station_sn") is not None
+                    ):
+                        # control station settings via Api
+                        resp = await self.coordinator.client.api.set_station_parm(
+                            deviceSn=self.coordinator_context,
+                            gridExport=enable ^ self.entity_description.inverted,
+                            toFile=self.coordinator.client.testmode(),
+                        )
+                    # Control all solarbank devices via individual MQTT device setting
                     if siteId := data.get("site_id"):
                         stationSn = (
                             self.coordinator_context
@@ -767,16 +732,6 @@ class AnkerSolixSwitch(CoordinatorEntity, SwitchEntity):
                                     },
                                 )
                             }
-                        # Last control settings via Api, set power limit will make required Api call for switch
-                        resp = (resp or {}) | (
-                            await self.coordinator.client.api.set_power_limit(
-                                siteId=siteId,
-                                deviceSn=self.coordinator_context,
-                                grid_export=enable ^ self.entity_description.inverted,
-                                toFile=self.coordinator.client.testmode(),
-                            )
-                            or {}
-                        )
                 else:
                     # SB1 schedule options
                     resp = await self.coordinator.client.api.set_home_load(
@@ -841,20 +796,15 @@ class AnkerSolixSwitch(CoordinatorEntity, SwitchEntity):
                 parm_map=parm_map,
                 toFile=self.coordinator.client.testmode(),
             )
-            if isinstance(resp, dict):
-                if ALLOW_TESTMODE:
-                    LOGGER.info(
-                        "%s: Applied MQTT command '%s' for '%s' toggle to '%s':\n%s",
-                        "TESTMODE"
-                        if self.coordinator.client.testmode()
-                        else "LIVEMODE",
-                        cmd,
-                        self.entity_id,
-                        "ON" if enable else "OFF",
-                        json.dumps(
-                            resp, indent=2 if len(json.dumps(resp)) < 200 else None
-                        ),
-                    )
+            if isinstance(resp, dict) and ALLOW_TESTMODE:
+                LOGGER.info(
+                    "%s: Applied MQTT command '%s' for '%s' toggle to '%s':\n%s",
+                    "TESTMODE" if self.coordinator.client.testmode() else "LIVEMODE",
+                    cmd,
+                    self.entity_id,
+                    "ON" if enable else "OFF",
+                    json.dumps(resp, indent=2 if len(json.dumps(resp)) < 200 else None),
+                )
                 # copy the changed state(s) of the mock response into device cache to avoid flip back of entity until real state is received
                 for key, val in resp.items():
                     if key in mdev.mqttdata:

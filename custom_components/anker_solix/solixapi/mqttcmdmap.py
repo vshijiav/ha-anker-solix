@@ -112,6 +112,7 @@ class SolixMqttCommands:
     sb_ev_charger_switch: str = "sb_ev_charger_switch"  # Driven through cloud
     plug_schedule: str = "plug_schedule"
     plug_delayed_toggle: str = "plug_delayed_toggle"
+
     device_power_mode: str = "device_power_mode"
     plug_lock_switch: str = "plug_lock_switch"
     ev_charger_mode_select: str = "ev_charger_mode_select"
@@ -884,34 +885,29 @@ CMD_PLUG_SCHEDULE = CMD_COMMON | {
     # Command: Smartplug schedule
     COMMAND_NAME: SolixMqttCommands.plug_schedule,
     "a2": {
-        NAME: "set_plug_schedule_action",  # 0=delete, 1=create, 2=modify
+        NAME: "set_plug_schedule_a2?",  # 1 - unknown
         TYPE: DeviceHexDataTypes.ui.value,
-        VALUE_OPTIONS: {"delete": 0, "create": 1, "modify": 2}
+        VALUE_DEFAULT: 1,
     },
     "a3": {
-        NAME: "set_plug_schedule_slot",  # schedule slot index, 1-x
+        NAME: "set_plug_schedule_order?",  # 1 - x
         TYPE: DeviceHexDataTypes.ui.value,
         VALUE_MIN: 1,
         VALUE_MAX: 10,
     },
     "a4": {
-        NAME: "set_plug_schedule_enabled",  # 0=disabled, 1=enabled
+        NAME: "set_plug_schedule_a4?",  # 1 - unknown
         TYPE: DeviceHexDataTypes.ui.value,
         VALUE_DEFAULT: 1,
     },
     "a5": TIME_SILE
     | {
-        NAME: "set_plug_schedule_time",  # min;hour as byte pair
+        NAME: "set_plug_schedule_time",  # min;hour
     },
     "a6": {
         NAME: "set_plug_schedule_switch",  # Off (0), On (1)
         TYPE: DeviceHexDataTypes.ui.value,
         VALUE_OPTIONS: {"off": 0, "on": 1},
-    },
-    "a7": {
-        NAME: "set_plug_schedule_weekdays",  # weekday selection as day numbers (1=Mon..7=Sun), length 1-7 (one byte per day)
-        TYPE: DeviceHexDataTypes.bin.value,
-        VALUE_OPTIONS: {"monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6, "sunday": 7},
     },
 }
 
@@ -919,17 +915,18 @@ CMD_PLUG_DELAYED_TOGGLE = CMD_COMMON | {
     # Command: Smartplug delayed toggle
     COMMAND_NAME: SolixMqttCommands.plug_delayed_toggle,
     "a2": {
-        NAME: "set_toggle_to_action",  # Off (0), Start (1), Pause (2), Resume (3)
+        NAME: "set_toggle_to_switch?",  # Off (0), On (1)
         TYPE: DeviceHexDataTypes.ui.value,
-        VALUE_OPTIONS: {"off": 0, "start": 1, "pause": 1, "resume": 1},
+        VALUE_OPTIONS: {"off": 0, "on": 1},
     },
     "a3": {
+        # NAME: "set_toggle_to_delay?",  # 3 bytes: Seconds:Minutes:Hours
         TYPE: DeviceHexDataTypes.bin.value,
         LENGTH: 3,
         BYTES: {
             "00": TIME_VAR
             | {
-                NAME: "set_toggle_to_delay_time", # 3 bytes: Seconds:Minutes:Hours
+                NAME: "set_toggle_to_delay_time",
                 VALUE_DEFAULT: 0,
             },
         },
@@ -940,12 +937,13 @@ CMD_PLUG_DELAYED_TOGGLE = CMD_COMMON | {
         VALUE_OPTIONS: {"off": 0, "on": 1},
     },
     "a5": {
+        # NAME: "set_toggle_back_delay?",  # 3 bytes: Seconds:Minutes:Hours
         TYPE: DeviceHexDataTypes.bin.value,
         LENGTH: 3,
         BYTES: {
             "00": TIME_VAR
             | {
-                NAME: "set_toggle_back_delay_time", # 3 bytes: Seconds:Minutes:Hours
+                NAME: "set_toggle_back_delay_time",
                 VALUE_DEFAULT: 0,
             },
         },

@@ -62,7 +62,6 @@ class AnkerSolixApi(AnkerSolixBaseApi):
         energy_daily,
         get_device_charge_order_stats,
         get_device_pv_statistics,
-        get_energy_offset,
         home_load_chart,
         refresh_pv_forecast,
     )
@@ -228,7 +227,6 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                         "all_power_limit_option",
                         "station_sn",
                         "total_stats",
-                        "energy_details",
                     ]:
                         if key == "power_limit_option":
                             if key in getattr(
@@ -285,6 +283,7 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                             "time_zone",
                             "grid_export_limit",
                             "owner_user_id",
+                            "phase",
                         ]
                         and value
                     ):
@@ -921,14 +920,10 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                                 ),
                             }
                         )
-                    elif (
-                        key
-                        in [
-                            "photovoltaic_to_grid_power",
-                            "grid_to_home_power",
-                        ]
-                        and value
-                    ):
+                    elif key in [
+                        "photovoltaic_to_grid_power",
+                        "grid_to_home_power",
+                    ]:
                         device[key] = str(value)
 
                     # smartplug specific keys
@@ -967,16 +962,9 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                         device["pv_name"] = (device.get("pv_name") or {}) | {
                             "pv2_name": str(value)
                         }
-                    elif key in [
-                        "phase",
-                        "main_ct_number",
-                        "branch_ct_number",
-                        "main_branch_check_status",
-                        "sub_pack_temp_alarm",
-                        "protection_status",
-                        "charge_protect_threshold",
-                        "discharge_protect_threshold",
-                    ]:
+
+                    # EV charger specific keys
+                    elif key == "ev_charger_status":
                         device[key] = value
 
                     # hes specific keys
@@ -1034,8 +1022,6 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                         device[key] = value
 
                     # EV charger specific keys
-                    elif key == "ev_charger_status":
-                        device[key] = value
                     elif (
                         key == "ocpp_connect_status"
                         and device.get("type") == SolixDeviceType.EV_CHARGER.value
@@ -1089,11 +1075,7 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                     # recalculate capacity if required
                     if cap_change and str(size).isdigit() and str(exp).isdigit():
                         # NOTE: Expansions for SB2 + 3 can have mixed capacity, which cannot be identified
-                        # NOTE: E10 controller has no battery, but needs 1-5 battery expansions
-                        controller_bat = 0 if device.get("device_pn") == "A17E1" else 1
-                        device["battery_capacity"] = (
-                            f"{size * (controller_bat + exp):.0f}"
-                        )
+                        device["battery_capacity"] = f"{size * (1 + exp):.0f}"
                     cap = device.get("battery_capacity")
                     # get total SOC, prefer value depending on overlay
                     soc = (
@@ -1657,7 +1639,7 @@ class AnkerSolixApi(AnkerSolixBaseApi):
 
         If queried attributes are provided, these will be used to validate the actual settings. If omitted, no attribute change validation will be done.
         Example attributes input:
-        {"pv_power_limit": 3600, "ac_power_limit": 1200, "switch_0w": 1}
+        {"pv_power_limit": 3600, "ac_power_limit": 1200, "power_limit": 800}
         """
         # validate parameter
         if not isinstance(attributes, dict):
@@ -1854,10 +1836,11 @@ class AnkerSolixApi(AnkerSolixBaseApi):
         ac_input: float | str | None = None,
         ac_output: float | str | None = None,
         pv_input: float | str | None = None,
+        # Grid export should be set through site station params for proper Api reflection
         grid_export: bool | int | None = None,
         toFile: bool = False,
     ) -> bool | dict:
-        """Set the provided power limits for the site and device using required Api queries."""
+        """Set the provided power limits for the site and device."""
         data = {}
         # validate parameter
         ac_input = (
@@ -1877,74 +1860,44 @@ class AnkerSolixApi(AnkerSolixBaseApi):
         )
         grid_export = bool(grid_export) if grid_export is not None else None
         query = []
-        attr_resp = {}
-        station_attr = {}
         # Prepare payload from parameters for proper device attributes
         # All device attributes not contained in get_power_limit response must be re-queried from get_device_attrs
         if ac_input is not None:
             data["ac_power_limit"] = ac_input
+        if ac_output is not None:
+            data["power_limit"] = ac_output
         if pv_input is not None:
             data["pv_power_limit"] = pv_input
             query.append("pv_power_limit")
         if grid_export is not None:
-            dev = self.devices.get(deviceSn, {})
-            if dev.get("station_sn") is None and dev.get("type") != SolixDeviceType.COMBINER_BOX.value:
-                # Grid export must be set via Api device attributes if not station managed (e.g. standalone Solarbank 2 systems)
-                data["switch_0w"] = 0 if grid_export else 1
-                query.append("switch_0w")
-            elif not isinstance(
-                # Combiner box or station managed devices must use Api station parameter settings
-                resp := await self.set_station_parm(
-                    siteId=siteId,
-                    deviceSn=deviceSn,
-                    gridExport=grid_export,
-                    toFile=toFile,
-                ),
-                dict,
-            ):
-                return False
-            elif "switch_0w" in (resp.get("param_data") or {}):
-                station_attr["switch_0w"] = resp["param_data"]["switch_0w"]
-        # process output limit via set_site_device_parm query type 19
-        if ac_output is not None and not isinstance(
-            await self.set_device_parm(
-                siteId=siteId,
-                paramType=SolixParmType.SOLARBANK_POWER_LIMIT.value,
-                paramData={
-                    "power_limit": {"limit": ac_output, "limit_real": ac_output}
-                },
+            data["switch_0w"] = 0 if grid_export else 1
+            query.append("switch_0w")
+        # update device attributes
+        attr_resp = None
+        if not isinstance(
+            attr_resp := await self.set_device_attributes(
                 deviceSn=deviceSn,
+                attributes=data,
+                query_attributes=query or None,
                 toFile=toFile,
             ),
             dict,
         ):
             return False
-        # update device attributes as required
-        if data:
-            if not isinstance(
-                resp := await self.set_device_attributes(
-                    deviceSn=deviceSn,
-                    attributes=data,
-                    query_attributes=query or None,
-                    toFile=toFile,
-                ),
-                dict,
-            ):
-                return False
-            attr_resp |= resp
         # Modify the updated attributes in the response and power limit file
         if toFile and (
             resp := await self.get_power_limit(siteId=siteId, fromFile=toFile)
         ):
-            ac_input_total = 0
-            for device in resp.get("device_info") or []:
-                if ac_input is not None and device.get("device_sn") == deviceSn:
+            for device in [
+                d
+                for d in resp.get("device_info") or []
+                if d.get("device_sn") == deviceSn
+            ]:
+                if ac_input is not None:
                     device["ac_input_limit"] = ac_input
-                ac_input_total += device.get("ac_input_limit") or 0
+            # TODO(Multisystem): Update additional fields once supported via cloud/device
             if ac_input is not None:
-                resp["ac_input_power_unit"] = f"{ac_input_total!s}W"
-            if ac_output is not None:
-                resp["legal_power_limit"] = ac_output
+                resp["ac_input_power_unit"] = f"{ac_input!s}W"
             # update ac power limit in file
             await self.apisession.saveToFile(
                 Path(self.testDir())
@@ -1955,8 +1908,8 @@ class AnkerSolixApi(AnkerSolixBaseApi):
                     "data": resp,
                 },
             )
-        # query the actual limits and update power limit cache
-        return {"device_attributes": attr_resp or {}} | {"station_attributes": station_attr or {}} | await self.get_power_limit(
+        # query the actual limits and update cache
+        return {"device_attributes": attr_resp} | await self.get_power_limit(
             siteId=siteId, fromFile=toFile
         )
 
